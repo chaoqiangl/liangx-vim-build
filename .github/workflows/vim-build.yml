@@ -267,7 +267,45 @@ jobs:
           echo "===== BUILD FINISHED ====="
           df -h /
 
-      # 9. 验证所有预期包
+      
+      # 9. 修复 DEB 文件名中的非法字符
+      - name: Normalize DEB filenames for artifact upload
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "===== NORMALIZE DEB FILENAMES ====="
+
+          shopt -s nullglob
+
+          for deb in "$GITHUB_WORKSPACE"/debs/*.deb; do
+            old_name="$(basename "$deb")"
+            new_name="${old_name//:/_}"
+
+            if [ "$old_name" != "$new_name" ]; then
+              echo "Rename:"
+              echo "  $old_name"
+              echo "  $new_name"
+
+              mv "$deb" \
+                "$GITHUB_WORKSPACE/debs/$new_name"
+            fi
+          done
+
+          echo "===== CHECK INVALID CHARACTERS ====="
+
+          if find "$GITHUB_WORKSPACE/debs" \
+            -maxdepth 1 -type f \
+            -name '*:*' | grep -q .; then
+            echo "ERROR: Colon remains in a filename."
+            exit 1
+          fi
+
+          echo "All filenames are artifact-safe."
+
+      
+ 
+      # 9_2. 验证所有预期包
       - name: Verify generated DEB packages
         shell: bash
         run: |
