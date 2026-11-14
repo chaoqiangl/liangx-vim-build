@@ -1,0 +1,107 @@
+
+name: Vim Build Environment Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/vim-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit official Termux Vim build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check runner resources
+        shell: bash
+        run: |
+          echo "===== SYSTEM ====="
+          uname -a
+          lscpu
+          echo "===== MEMORY ====="
+          free -h
+          echo "===== DISK ====="
+          df -h
+
+      - name: Checkout official Termux packages
+        uses: actions/checkout@v4
+        with:
+          repository: termux/termux-packages
+          ref: master
+          path: termux-packages
+
+      - name: Inspect Vim build metadata
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -eu
+
+          echo "===== SOURCE COMMIT ====="
+          git rev-parse HEAD
+
+          echo "===== VIM BUILD SCRIPT ====="
+          sed -n '1,260p' packages/vim/build.sh
+
+          echo "===== BUILD SYSTEM OPTIONS ====="
+          ./build-package.sh --help || true
+
+      - name: Inspect requested package metadata
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -eu
+
+          for package in \
+            vim \
+            libiconv \
+            libsodium \
+            ncurses \
+            luajit \
+            perl \
+            python \
+            ruby \
+            tcl \
+            diffutils \
+            xxd
+          do
+            echo
+            echo "===== PACKAGE: $package ====="
+
+            if [ -f "packages/$package/build.sh" ]; then
+              grep -nE \
+                '^(TERMUX_PKG_(NAME|VERSION|DEPENDS|BUILD_DEPENDS|RECOMMENDS|SUGGESTS|CONFLICTS|PROVIDES))=' \
+                "packages/$package/build.sh" || true
+            else
+              echo "Not found in packages/"
+              find . -path "*/$package/build.sh" -print
+            fi
+          done
+
+      - name: Inspect dependency resolver
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -eu
+
+          echo "===== BUILD ORDER HELP ====="
+          python3 scripts/buildorder.py --help || true
+
+          echo "===== PACKAGE DIRECTORY ====="
+          ls -ld packages
+          echo "===== REPOSITORY METADATA ====="
+          sed -n '1,200p' repo.json
+
+      - name: Save audit information
+        if: always()
+        shell: bash
+        run: |
+          echo "Audit completed."
+          echo "Target architecture: aarch64"
+          echo "No package compilation was performed."
+
