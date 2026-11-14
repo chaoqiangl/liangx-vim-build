@@ -25,8 +25,10 @@ jobs:
           echo "===== SYSTEM ====="
           uname -a
           nproc
+
           echo "===== MEMORY ====="
           free -h
+
           echo "===== DISK ====="
           df -h /
 
@@ -56,8 +58,8 @@ jobs:
           grep -q '^TERMUX_APP__PACKAGE_NAME="com.liangx"$' \
             scripts/properties.sh
 
-          echo "Official repository identity remains unchanged:"
-          grep -n '^TERMUX_REPO_APP__PACKAGE_NAME=' scripts/properties.sh
+          echo "===== REPOSITORY IDENTITY ====="
+          grep -n '^TERMUX_REPO_APP__PACKAGE_NAME=' scripts/properties.sh || true
 
       - name: Install Ubuntu build environment
         working-directory: termux-packages
@@ -86,8 +88,9 @@ jobs:
           grep '^TERMUX_APP__PACKAGE_NAME=' scripts/properties.sh
 
           echo "===== NDK ====="
-          grep -E '^(Pkg.Revision|Pkg.ReleaseName)' \
-            "$HOME/lib/android-ndk-r30/source.properties"
+          find "$HOME" -path '*/source.properties' \
+            -print -exec grep -E '^(Pkg.Revision|Pkg.ReleaseName)' {} \; \
+            2>/dev/null | head -30
 
           echo "===== BUILD TOOL ====="
           ./build-package.sh --help || true
@@ -158,8 +161,18 @@ jobs:
           done
 
           cd "$GITHUB_WORKSPACE/debs"
+
           sha256sum ./*.deb > SHA256SUMS.txt
 
           echo "===== TOTAL ====="
           du -sh "$GITHUB_WORKSPACE/debs"
 
+      - name: Upload all DEB packages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: liangx-vim-aarch64-debs
+          path: debs/
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
