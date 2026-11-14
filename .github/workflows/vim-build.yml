@@ -14,14 +14,19 @@ permissions:
 
 jobs:
   build:
-    name: Build Vim for com.liangx
+    name: Build Vim and Complete Dependencies for com.liangx
     runs-on: ubuntu-26.04
     timeout-minutes: 360
 
     steps:
+      # --------------------------------------------------
+      # 1. 检查 GitHub Runner 资源
+      # --------------------------------------------------
       - name: Check runner resources
         shell: bash
         run: |
+          set -euo pipefail
+
           echo "===== SYSTEM ====="
           uname -a
           nproc
@@ -32,6 +37,9 @@ jobs:
           echo "===== DISK ====="
           df -h /
 
+      # --------------------------------------------------
+      # 2. 获取固定版本的 Termux 官方源码
+      # --------------------------------------------------
       - name: Checkout official Termux packages
         uses: actions/checkout@v4
         with:
@@ -39,6 +47,9 @@ jobs:
           ref: e0ce77d242bb9f9adb48cc38dca4d69b3b6d0af9
           path: termux-packages
 
+      # --------------------------------------------------
+      # 3. 修改应用包名
+      # --------------------------------------------------
       - name: Configure package identity
         working-directory: termux-packages
         shell: bash
@@ -61,20 +72,31 @@ jobs:
           echo "===== REPOSITORY IDENTITY ====="
           grep -n '^TERMUX_REPO_APP__PACKAGE_NAME=' scripts/properties.sh || true
 
+      # --------------------------------------------------
+      # 4. 安装 Ubuntu 构建环境
+      # --------------------------------------------------
       - name: Install Ubuntu build environment
         working-directory: termux-packages
         shell: bash
         run: |
           set -euo pipefail
+
           ./scripts/setup-ubuntu.sh
 
+      # --------------------------------------------------
+      # 5. 安装 Android SDK 和 NDK
+      # --------------------------------------------------
       - name: Install Android SDK and NDK
         working-directory: termux-packages
         shell: bash
         run: |
           set -euo pipefail
+
           ./scripts/setup-android-sdk.sh
 
+      # --------------------------------------------------
+      # 6. 检查构建环境
+      # --------------------------------------------------
       - name: Verify build environment
         working-directory: termux-packages
         shell: bash
@@ -98,7 +120,137 @@ jobs:
           echo "===== DISK BEFORE BUILD ====="
           df -h /
 
-      - name: Build Vim and recommended diffutils
+      # --------------------------------------------------
+      # 7. 解析 Vim 和 diffutils 的完整依赖构建顺序
+      # --------------------------------------------------
+      - name: Generate complete dependency build list
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "===== RESOLVE VIM DEPENDENCIES ====="
+
+          python3 scripts/buildorder.py \
+            -i packages/vim packages \
+            > "$GITHUB_WORKSPACE/vim-build-order.txt"
+
+          echo "===== RESOLVE DIFFUTILS DEPENDENCIES ====="
+
+          python3 scripts/buildorder.py \
+            -i packages/diffutils packages \
+            > "$GITHUB_WORKSPACE/diffutils-build-order.txt"
+
+          echo "===== GENERATE BUILD TARGETS ====="
+
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"])
+
+          order_files = [
+              workspace / "vim-build-order.txt",
+              workspace / "diffutils-build-order.txt",
+          ]
+
+          root_targets = {"vim", "diffutils"}
+
+          build_targets = []
+          seen_targets = set()
+
+          expected_packages = set()
+
+          for order_file in order_files:
+              if not order_file.is_file():
+                  raise SystemExit(
+                      f"ERROR: Missing build order file: {order_file}"
+                  )
+
+              with order_file.open(encoding="utf-8") as f:
+                  for line in f:
+                      fields = line.split(maxsplit=1)
+
+                      if len(fields) != 2:
+                          continue
+
+                      package_name, package_dir = fields
+
+                      package_path = Path(package_dir)
+
+                      if not package_path.is_dir():
+                          raise SystemExit(
+                              f"ERROR: Invalid package directory: {package_dir}"
+                          )
+
+                      expected_packages.add(package_name)
+
+                      # Subpackages share their parent's build.sh.
+                      # Build the parent directory only once.
+                      target = package_path.name
+
+                      if target in root_targets:
+                          continue
+
+                      if target not in seen_targets:
+                          seen_targets.add(target)
+                          build_targets.append(target)
+
+          # Always build the two requested root packages last.
+          for target in ("vim", "diffutils"):
+              if target not in seen_targets:
+                  seen_targets.add(target)
+                  build_targets.append(target)
+
+          # xxd is a Vim subpackage, not an independent build target.
+          expected_packages.update({
+              "vim",
+              "xxd",
+              "diffutils",
+          })
+
+          if not build_targets:
+              raise SystemExit("ERROR: Empty build target list")
+
+          with (workspace / "build-targets.txt").open(
+              "w", encoding="utf-8"
+          ) as f:
+              f.write("\n".join(build_targets) + "\n")
+
+          with (workspace / "expected-packages.txt").open(
+              "w", encoding="utf-8"
+          ) as f:
+              f.write("\n".join(sorted(expected_packages)) + "\n")
+
+          print("===== BUILD TARGETS =====")
+          for target in build_targets:
+              print(target)
+
+          print(f"Total build targets: {len(build_targets)}")
+
+          print()
+          print("===== EXPECTED PACKAGES =====")
+          for package in sorted(expected_packages):
+              print(package)
+
+          print(f"Total expected packages: {len(expected_packages)}")
+          PY
+
+          echo "===== BUILD ORDER SUMMARY ====="
+          wc -l \
+            "$GITHUB_WORKSPACE/vim-build-order.txt" \
+            "$GITHUB_WORKSPACE/diffutils-build-order.txt"
+
+          echo "===== BUILD TARGET COUNT ====="
+          wc -l "$GITHUB_WORKSPACE/build-targets.txt"
+
+          echo "===== EXPECTED PACKAGE COUNT ====="
+          wc -l "$GITHUB_WORKSPACE/expected-packages.txt"
+
+      # --------------------------------------------------
+      # 8. 显式构建全部依赖包
+      # --------------------------------------------------
+      - name: Build Vim and all dependencies
         working-directory: termux-packages
         shell: bash
         run: |
@@ -106,24 +258,44 @@ jobs:
 
           mkdir -p "$GITHUB_WORKSPACE/debs"
 
+          mapfile -t BUILD_TARGETS \
+            < "$GITHUB_WORKSPACE/build-targets.txt"
+
+          if [ "${#BUILD_TARGETS[@]}" -eq 0 ]; then
+            echo "ERROR: Build target list is empty."
+            exit 1
+          fi
+
           echo "===== BUILD TARGETS ====="
-          echo "vim"
-          echo "diffutils"
-          echo "Architecture: aarch64"
-          echo "Prefix: /data/data/com.liangx/files/usr"
+          printf '%s\n' "${BUILD_TARGETS[@]}"
+
+          echo "===== TARGET ARCHITECTURE ====="
+          echo "aarch64"
+
+          echo "===== INSTALL PREFIX ====="
+          echo "/data/data/com.liangx/files/usr"
+
+          echo "===== BUILD ALL TARGETS ====="
 
           ./build-package.sh \
             -a aarch64 \
             -j2 \
             -o "$GITHUB_WORKSPACE/debs" \
-            vim diffutils
+            "${BUILD_TARGETS[@]}"
 
+          echo "===== BUILD FINISHED ====="
+          df -h /
+
+      # --------------------------------------------------
+      # 9. 验证所有预期 DEB 是否生成
+      # --------------------------------------------------
       - name: Verify generated DEB packages
         shell: bash
         run: |
           set -euo pipefail
 
           shopt -s nullglob
+
           DEBS=("$GITHUB_WORKSPACE"/debs/*.deb)
 
           if [ "${#DEBS[@]}" -eq 0 ]; then
@@ -140,7 +312,7 @@ jobs:
             version="$(dpkg-deb -f "$deb" Version)"
             architecture="$(dpkg-deb -f "$deb" Architecture)"
 
-            printf '%-25s %-25s %s\n' \
+            printf '%-30s %-25s %s\n' \
               "$package" "$version" "$architecture"
 
             printf '%s %s %s\n' \
@@ -148,11 +320,37 @@ jobs:
               >> "$GITHUB_WORKSPACE/debs/PACKAGE-MANIFEST.txt"
           done
 
-          echo "===== REQUIRED PACKAGES ====="
+          echo "===== VERIFY ALL EXPECTED PACKAGES ====="
+
+          while IFS= read -r required; do
+            [ -n "$required" ] || continue
+
+            found=false
+
+            for deb in "${DEBS[@]}"; do
+              package="$(dpkg-deb -f "$deb" Package)"
+
+              if [ "$package" = "$required" ]; then
+                found=true
+                break
+              fi
+            done
+
+            if [ "$found" != true ]; then
+              echo "ERROR: Missing DEB package: $required"
+              exit 1
+            fi
+
+            echo "OK: $required"
+
+          done < "$GITHUB_WORKSPACE/expected-packages.txt"
+
+          echo "===== VERIFY REQUIRED MAIN PACKAGES ====="
 
           for required in vim xxd diffutils; do
             if ! grep -q "^${required} " \
               "$GITHUB_WORKSPACE/debs/PACKAGE-MANIFEST.txt"; then
+
               echo "ERROR: Required package missing: $required"
               exit 1
             fi
@@ -160,13 +358,56 @@ jobs:
             echo "OK: $required"
           done
 
+          echo "===== VERIFY ARCHITECTURES ====="
+
+          for deb in "${DEBS[@]}"; do
+            architecture="$(dpkg-deb -f "$deb" Architecture)"
+
+            case "$architecture" in
+              aarch64|all)
+                ;;
+              *)
+                echo "ERROR: Unexpected architecture:"
+                echo "$deb"
+                echo "$architecture"
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "All package architectures are valid."
+
+          # Include the dependency reports in the Artifact.
+          cp "$GITHUB_WORKSPACE/build-targets.txt" \
+            "$GITHUB_WORKSPACE/debs/"
+
+          cp "$GITHUB_WORKSPACE/expected-packages.txt" \
+            "$GITHUB_WORKSPACE/debs/"
+
+          cp "$GITHUB_WORKSPACE/vim-build-order.txt" \
+            "$GITHUB_WORKSPACE/debs/"
+
+          cp "$GITHUB_WORKSPACE/diffutils-build-order.txt" \
+            "$GITHUB_WORKSPACE/debs/"
+
+          echo "===== GENERATE SHA256 ====="
+
           cd "$GITHUB_WORKSPACE/debs"
 
           sha256sum ./*.deb > SHA256SUMS.txt
 
-          echo "===== TOTAL ====="
+          echo "===== TOTAL PACKAGE COUNT ====="
+          find . -maxdepth 1 -name '*.deb' | wc -l
+
+          echo "===== TOTAL ARTIFACT SIZE ====="
           du -sh "$GITHUB_WORKSPACE/debs"
 
+          echo "===== DISK AFTER BUILD ====="
+          df -h /
+
+      # --------------------------------------------------
+      # 10. 上传全部 DEB 和构建报告
+      # --------------------------------------------------
       - name: Upload all DEB packages
         if: always()
         uses: actions/upload-artifact@v4
