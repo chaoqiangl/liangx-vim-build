@@ -1,0 +1,151 @@
+
+name: Build Liangx Vim DEB
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/vim-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Vim for com.liangx
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Check runner resources
+        shell: bash
+        run: |
+          echo "===== SYSTEM ====="
+          uname -a
+          nproc
+          echo "===== MEMORY ====="
+          free -h
+          echo "===== DISK ====="
+          df -h /
+
+      - name: Checkout official Termux packages
+        uses: actions/checkout@v4
+        with:
+          repository: termux/termux-packages
+          ref: e0ce77d242bb9f9adb48cc38dca4d69b3b6d0af9
+          path: termux-packages
+
+      - name: Configure package identity
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "===== ORIGINAL CONFIGURATION ====="
+          grep -n '^TERMUX_APP__PACKAGE_NAME=' scripts/properties.sh
+
+          sed -i \
+            's/^TERMUX_APP__PACKAGE_NAME="com\.termux"$/TERMUX_APP__PACKAGE_NAME="com.liangx"/' \
+            scripts/properties.sh
+
+          echo "===== MODIFIED CONFIGURATION ====="
+          grep -n '^TERMUX_APP__PACKAGE_NAME=' scripts/properties.sh
+
+          grep -q '^TERMUX_APP__PACKAGE_NAME="com.liangx"$' \
+            scripts/properties.sh
+
+          echo "Official repository identity remains unchanged:"
+          grep -n '^TERMUX_REPO_APP__PACKAGE_NAME=' scripts/properties.sh
+
+      - name: Install Ubuntu build environment
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/setup-ubuntu.sh
+
+      - name: Install Android SDK and NDK
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/setup-android-sdk.sh
+
+      - name: Verify build environment
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "===== SOURCE COMMIT ====="
+          git rev-parse HEAD
+
+          echo "===== PACKAGE IDENTITY ====="
+          grep '^TERMUX_APP__PACKAGE_NAME=' scripts/properties.sh
+
+          echo "===== NDK ====="
+          grep -E '^(Pkg.Revision|Pkg.ReleaseName)' \
+            "$HOME/lib/android-ndk-r30/source.properties"
+
+          echo "===== BUILD TOOL ====="
+          ./build-package.sh --help || true
+
+          echo "===== DISK BEFORE BUILD ====="
+          df -h /
+
+      - name: Build Vim and recommended diffutils
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$GITHUB_WORKSPACE/debs"
+
+          echo "===== BUILD TARGETS ====="
+          echo "vim"
+          echo "diffutils"
+          echo "Architecture: aarch64"
+          echo "Prefix: /data/data/com.liangx/files/usr"
+
+          ./build-package.sh \
+            -a aarch64 \
+            -j2 \
+            -o "$GITHUB_WORKSPACE/debs" \
+            vim diffutils
+
+      - name: Verify generated DEB packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          DEBS=("$GITHUB_WORKSPACE"/debs/*.deb)
+
+          if [ "${#DEBS[@]}" -eq 0 ]; then
+            echo "ERROR: No DEB packages were generated."
+            exit 1
+          fi
+
+          echo "===== GENERATED PACKAGES ====="
+
+          : > "$GITHUB_WORKSPACE/debs/PACKAGE-MANIFEST.txt"
+
+          for deb in "${DEBS[@]}"; do
+            package="$(dpkg-deb -f "$deb" Package)"
+            version="$(dpkg-deb -f "$deb" Version)"
+            architecture="$(dpkg-deb -f "$deb" Architecture)"
+
+            printf '%-25s %-25s %s\n' \
+              "$package" "$version" "$architecture"
+
+            printf '%s %s %s\n' \
+              "$package" "$version" "$architecture" \
+              >> "$GITHUB_WORKSPACE/debs/PACKAGE-MANIFEST.txt"
+          done
+
+          echo "===== REQUIRED PACKAGES ====="
+
+          for required in vim xxd diffutils; do
+            if !
