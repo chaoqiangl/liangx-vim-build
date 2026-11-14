@@ -90,7 +90,7 @@ jobs:
           set -eu
 
           echo "===== BUILD ORDER HELP ====="
-          python3 scripts/buildorder.py vim packages
+          python3 scripts/buildorder.py packages/vim packages
           
           echo "===== Xxd PACKAGE LOCATION ====="
           grep -RniE '(^|[^a-z])xxd([^a-z]|$)' packages/vim packages 2>/dev/null | head -100
