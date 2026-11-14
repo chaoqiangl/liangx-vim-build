@@ -90,7 +90,17 @@ jobs:
           set -eu
 
           echo "===== BUILD ORDER HELP ====="
-          python3 scripts/buildorder.py --help || true
+          python3 scripts/buildorder.py vim packages
+          
+          echo "===== Xxd PACKAGE LOCATION ====="
+          grep -RniE '(^|[^a-z])xxd([^a-z]|$)' packages/vim packages 2>/dev/null | head -100
+          
+          echo "===== PACKAGE DEFINITIONS ====="
+          for package in vim diffutils xxd vim-runtime vim-python; do
+            echo "===== $package ====="
+            find packages -path "*/$package/build.sh" -print
+          done
+          
 
           echo "===== PACKAGE DIRECTORY ====="
           ls -ld packages
