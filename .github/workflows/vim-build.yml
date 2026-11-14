@@ -148,4 +148,18 @@ jobs:
           echo "===== REQUIRED PACKAGES ====="
 
           for required in vim xxd diffutils; do
-            if !
+            if ! grep -q "^${required} " \
+              "$GITHUB_WORKSPACE/debs/PACKAGE-MANIFEST.txt"; then
+              echo "ERROR: Required package missing: $required"
+              exit 1
+            fi
+
+            echo "OK: $required"
+          done
+
+          cd "$GITHUB_WORKSPACE/debs"
+          sha256sum ./*.deb > SHA256SUMS.txt
+
+          echo "===== TOTAL ====="
+          du -sh "$GITHUB_WORKSPACE/debs"
+
