@@ -1,0 +1,188 @@
+
+name: Build Liangx Download Tools DEBs
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/download-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Download Tools for com.liangx
+    runs-on: ubuntu-26.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Check runner resources
+        shell: bash
+        run: |
+          echo "===== SYSTEM ====="
+          uname -a
+          nproc
+          echo "===== MEMORY ====="
+          free -h
+          echo "===== DISK ====="
+          df -h /
+
+      - name: Checkout official Termux packages
+        uses: actions/checkout@v4
+        with:
+          repository: termux/termux-packages
+          ref: e0ce77d242bb9f9adb48cc38dca4d69b3b6d0af9
+          path: termux-packages
+
+      - name: Configure package identity
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sed -i \
+            's/^TERMUX_APP__PACKAGE_NAME="com\.termux"$/TERMUX_APP__PACKAGE_NAME="com.liangx"/' \
+            scripts/properties.sh
+
+          grep -q '^TERMUX_APP__PACKAGE_NAME="com.liangx"$' \
+            scripts/properties.sh
+
+          echo "===== PACKAGE IDENTITY ====="
+          grep '^TERMUX_APP__PACKAGE_NAME=' scripts/properties.sh
+
+      - name: Install Ubuntu build environment
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/setup-ubuntu.sh
+
+      - name: Install Android SDK and NDK
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/setup-android-sdk.sh
+
+      - name: Verify source and build recipes
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "===== SOURCE COMMIT ====="
+          git rev-parse HEAD
+
+          echo "===== PACKAGE IDENTITY ====="
+          grep '^TERMUX_APP__PACKAGE_NAME=' scripts/properties.sh
+
+          echo "===== BUILD TARGET RECIPES ====="
+
+          for package in rclone python-yt-dlp wget2
+          do
+            if [ ! -f "packages/$package/build.sh" ]; then
+              echo "ERROR: Missing recipe: $package"
+              exit 1
+            fi
+
+            echo "OK: $package"
+          done
+
+          echo "===== DISK BEFORE BUILD ====="
+          df -h /
+
+      - name: Build download tools and dependencies
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$GITHUB_WORKSPACE/debs"
+
+          echo "===== BUILD TARGETS ====="
+          echo "rclone"
+          echo "python-yt-dlp"
+          echo "wget2"
+
+          echo "===== ARCHITECTURE ====="
+          echo "aarch64"
+
+          echo "===== PREFIX ====="
+          echo "/data/data/com.liangx/files/usr"
+
+          ./build-package.sh \
+            -a aarch64 \
+            -j2 \
+            -o "$GITHUB_WORKSPACE/debs" \
+            rclone \
+            python-yt-dlp \
+            wget2
+
+      - name: Verify generated DEB packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          DEBS=("$GITHUB_WORKSPACE"/debs/*.deb)
+
+          if [ "${#DEBS[@]}" -eq 0 ]; then
+            echo "ERROR: No DEB packages were generated."
+            exit 1
+          fi
+
+          MANIFEST="$GITHUB_WORKSPACE/debs/PACKAGE-MANIFEST.txt"
+          : > "$MANIFEST"
+
+          echo "===== GENERATED PACKAGES ====="
+
+          for deb in "${DEBS[@]}"
+          do
+            package="$(dpkg-deb -f "$deb" Package)"
+            version="$(dpkg-deb -f "$deb" Version)"
+            architecture="$(dpkg-deb -f "$deb" Architecture)"
+
+            printf '%-30s %-25s %s\n' \
+              "$package" "$version" "$architecture"
+
+            printf '%s %s %s\n' \
+              "$package" "$version" "$architecture" \
+              >> "$MANIFEST"
+
+            if [ "$architecture" != "aarch64" ] && [ "$architecture" != "all" ]; then
+              echo "ERROR: Unexpected architecture: $architecture"
+              exit 1
+            fi
+          done
+
+          echo "===== REQUIRED TARGETS ====="
+
+          for required in rclone python-yt-dlp wget2
+          do
+            if ! awk -v p="$required" '$1 == p { found=1 } END { exit !found }' "$MANIFEST"; then
+              echo "ERROR: Required package missing: $required"
+              exit 1
+            fi
+
+            echo "OK: $required"
+          done
+
+          cd "$GITHUB_WORKSPACE/debs"
+          sha256sum ./*.deb > SHA256SUMS.txt
+
+          echo "===== TOTAL ====="
+          echo "DEB count: ${#DEBS[@]}"
+          du -sh "$GITHUB_WORKSPACE/debs"
+
+      - name: Upload download DEB packages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: liangx-download-aarch64-debs
+          path: debs/
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
