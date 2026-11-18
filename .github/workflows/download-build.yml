@@ -178,18 +178,16 @@ jobs:
 
 
 
+
+
+
+
       - name: Fix ncurses foot terminfo source path
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="termux-packages/packages/ncurses/build.sh"
-
-          if [ ! -f "$FILE" ]; then
-            echo "ERROR: ncurses build.sh not found"
-            find termux-packages -path '*/ncurses/build.sh' -print
-            exit 1
-          fi
 
           python3 - "$FILE" <<'PY'
           import pathlib
@@ -198,25 +196,26 @@ jobs:
           path = pathlib.Path(sys.argv[1])
           content = path.read_text()
 
-          old = '$TERMUX_PKG_SRCDIR/foot/foot.info'
-          new = '$(find "$TERMUX_PKG_SRCDIR/foot" -type f -name foot.info -print -quit)'
+          old = '$(find "$TERMUX_PKG_SRCDIR/foot" -type f -name foot.info -print -quit)'
+          new = '$(find "$TERMUX_PKG_SRCDIR" -type f -name foot.info -print -quit)'
 
           count = content.count(old)
 
           if count != 1:
-              print("ERROR: Expected exactly one original foot.info path.")
-              print("Matching lines:")
-              for number, line in enumerate(content.splitlines(), 1):
-                  if "foot.info" in line:
-                      print(f"{number}: {line}")
-              raise SystemExit(f"Found {count}, expected 1")
+              raise SystemExit(
+                  f"ERROR: Expected exactly one previous lookup command, found {count}"
+              )
 
           path.write_text(content.replace(old, new, 1))
-          print("OK: ncurses foot.info lookup updated")
+          print("OK: ncurses foot.info lookup now searches entire source tree")
           PY
 
           echo "===== UPDATED NCURSES FOOT SECTION ====="
           grep -n -B2 -A3 'foot.info' "$FILE"
+
+
+
+
 
 
 
