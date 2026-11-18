@@ -1,0 +1,85 @@
+name: Build Liangx c-ares DEB
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/c-ares-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Checkout build repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Termux packages
+        uses: actions/checkout@v4
+        with:
+          repository: termux/termux-packages
+          ref: e0ce77d242bb9f9adb48cc38dca4d69b3b6d0af9
+          path: termux-packages
+
+      - name: Set up build environment
+        run: |
+          cd termux-packages
+          ./scripts/setup-ubuntu.sh
+          ./scripts/setup-android-sdk.sh
+
+      - name: Configure Liangx package identity
+        run: |
+          cd termux-packages
+          sed -i 's/TERMUX_APP__PACKAGE_NAME="com.termux"/TERMUX_APP__PACKAGE_NAME="com.liangx"/' scripts/properties.sh
+          grep 'TERMUX_APP__PACKAGE_NAME=' scripts/properties.sh
+
+      - name: Verify c-ares recipe
+        run: |
+          cd termux-packages
+
+          test -f packages/c-ares/build.sh
+
+          echo "===== C-ARES RECIPE ====="
+          cat packages/c-ares/build.sh
+
+          echo "===== RESOLV-CONF RECIPE ====="
+          test -f packages/resolv-conf/build.sh
+          cat packages/resolv-conf/build.sh
+
+      - name: Build c-ares for aarch64
+        run: |
+          cd termux-packages
+
+          ./build-package.sh \
+            -a aarch64 \
+            -j2 \
+            -o "$GITHUB_WORKSPACE/debs" \
+            c-ares
+
+      - name: Verify build output
+        run: |
+          set -e
+
+          echo "===== GENERATED DEB FILES ====="
+          find debs -maxdepth 1 -type f -name '*.deb' -print
+
+          echo "===== VERIFY C-ARES PACKAGE ====="
+          C_ARES_DEB=$(find debs -maxdepth 1 -type f -name 'c-ares_*_aarch64.deb' | head -n 1)
+
+          test -n "$C_ARES_DEB"
+
+          dpkg-deb -f "$C_ARES_DEB" Package Version Architecture Depends
+
+          echo "===== SHA256 ====="
+          sha256sum debs/*.deb
+
+      - name: Upload c-ares DEB artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: liangx-c-ares-aarch64-debs
+          path: debs/*.deb
+          if-no-files-found: error
+          retention-days: 30
