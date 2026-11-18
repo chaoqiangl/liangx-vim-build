@@ -172,6 +172,60 @@ jobs:
           echo
           echo "OK: foot Debian source archive verified"
 
+
+
+      - name: Fix ncurses foot terminfo source path
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="termux-packages/packages/ncurses/build.sh"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: ncurses build.sh not found"
+            exit 1
+          fi
+
+          python3 - "$FILE" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          content = path.read_text()
+
+          pattern = re.compile(
+              r"(?m)^([ \t]*)sed 's/@default_terminfo@/foot/g' "
+              r'"\$TERMUX_PKG_SRCDIR/foot/foot\.info" \|$'
+          )
+
+          replacement = (
+              r'\1FOOT_INFO="$(find "$TERMUX_PKG_SRCDIR" '
+              r'-type f -path "*/foot.info" -print -quit)"\n'
+              r'\1if [[ -z "$FOOT_INFO" ]]; then\n'
+              r'\1    termux_error_exit "Could not locate foot.info"\n'
+              r'\1fi\n'
+              r'\1sed \'s/@default_terminfo@/foot/g\' "$FOOT_INFO" |'
+          )
+
+          updated, count = pattern.subn(replacement, content)
+
+          if count != 1:
+              raise SystemExit(
+                  f"ERROR: Expected exactly one ncurses foot.info command, found {count}"
+              )
+
+          path.write_text(updated)
+          print("OK: ncurses now locates foot.info dynamically")
+          PY
+
+          echo "===== UPDATED NCURSES FOOT SECTION ====="
+          grep -n -A5 -B2 'FOOT_INFO=' "$FILE"
+
+
+
+
+
       - name: Install Ubuntu build environment
         working-directory: termux-packages
         shell: bash
