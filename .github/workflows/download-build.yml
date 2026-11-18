@@ -1,4 +1,3 @@
-
 name: Build Liangx Download Tools DEBs
 
 on:
@@ -25,8 +24,10 @@ jobs:
           echo "===== SYSTEM ====="
           uname -a
           nproc
+
           echo "===== MEMORY ====="
           free -h
+
           echo "===== DISK ====="
           df -h /
 
@@ -36,6 +37,57 @@ jobs:
           repository: termux/termux-packages
           ref: e0ce77d242bb9f9adb48cc38dca4d69b3b6d0af9
           path: termux-packages
+
+      - name: Configure persistent build cache directory
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "TERMUX_TOPDIR=$HOME/.termux-build" >> "$GITHUB_ENV"
+
+          mkdir -p "$HOME/.termux-build"
+
+          echo "===== TERMUX TOPDIR ====="
+          echo "$HOME/.termux-build"
+
+      - name: Configure resilient curl downloader
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REAL_CURL="$(command -v curl)"
+
+          if [ -z "$REAL_CURL" ]; then
+            echo "ERROR: curl not found"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/liangx-download-tools"
+
+          cat > "$RUNNER_TEMP/liangx-download-tools/curl" <<EOF
+          #!/usr/bin/env bash
+          exec "$REAL_CURL" "\$@" \
+            --retry 12 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --retry-max-time 1200 \
+            --connect-timeout 30 \
+            --max-time 300
+          EOF
+
+          chmod +x "$RUNNER_TEMP/liangx-download-tools/curl"
+
+          echo "$RUNNER_TEMP/liangx-download-tools" >> "$GITHUB_PATH"
+
+          echo "===== ORIGINAL CURL ====="
+          "$REAL_CURL" --version
+
+          echo "===== RETRY POLICY ====="
+          echo "Retries: 12"
+          echo "Retry delay: 10 seconds"
+          echo "Retry max time: 1200 seconds"
+          echo "Connect timeout: 30 seconds"
+          echo "Maximum transfer time: 300 seconds"
 
       - name: Configure package identity
         working-directory: termux-packages
@@ -67,6 +119,17 @@ jobs:
           set -euo pipefail
           ./scripts/setup-android-sdk.sh
 
+      - name: Restore Termux source cache
+        id: termux_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.termux-build/*/cache
+            ~/.termux-build/_cache
+          key: termux-source-ubuntu-26.04-e0ce77d242bb9f9adb48cc38dca4d69b3b6d0af9-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            termux-source-ubuntu-26.04-e0ce77d242bb9f9adb48cc38dca4d69b3b6d0af9-
+
       - name: Verify source and build recipes
         working-directory: termux-packages
         shell: bash
@@ -78,6 +141,10 @@ jobs:
 
           echo "===== PACKAGE IDENTITY ====="
           grep '^TERMUX_APP__PACKAGE_NAME=' scripts/properties.sh
+
+          echo "===== CURL LOCATION ====="
+          command -v curl
+          curl --version
 
           echo "===== BUILD TARGET RECIPES ====="
 
@@ -113,6 +180,13 @@ jobs:
           echo "===== PREFIX ====="
           echo "/data/data/com.liangx/files/usr"
 
+          echo "===== DOWNLOAD RETRY ====="
+          echo "curl retries: 12"
+          echo "retry all errors: enabled"
+
+          echo "===== SOURCE CACHE ====="
+          echo "$TERMUX_TOPDIR"
+
           ./build-package.sh \
             -a aarch64 \
             -j2 \
@@ -120,6 +194,15 @@ jobs:
             rclone \
             python-yt-dlp \
             wget2
+
+      - name: Save Termux source cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.termux-build/*/cache
+            ~/.termux-build/_cache
+          key: termux-source-ubuntu-26.04-e0ce77d242bb9f9adb48cc38dca4d69b3b6d0af9-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Verify generated DEB packages
         shell: bash
@@ -178,11 +261,11 @@ jobs:
           du -sh "$GITHUB_WORKSPACE/debs"
 
       - name: Upload download DEB packages
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: liangx-download-aarch64-debs
           path: debs/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
           compression-level: 0
