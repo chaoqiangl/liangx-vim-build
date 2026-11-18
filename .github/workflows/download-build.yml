@@ -174,6 +174,8 @@ jobs:
 
 
 
+
+
       - name: Fix ncurses foot terminfo source path
         shell: bash
         run: |
@@ -188,39 +190,28 @@ jobs:
 
           python3 - "$FILE" <<'PY'
           import pathlib
-          import re
           import sys
 
           path = pathlib.Path(sys.argv[1])
           content = path.read_text()
 
-          pattern = re.compile(
-              r"(?m)^([ \t]*)sed 's/@default_terminfo@/foot/g' "
-              r'"\$TERMUX_PKG_SRCDIR/foot/foot\.info" \|$'
-          )
+          old = '"$TERMUX_PKG_SRCDIR/foot/foot.info"'
+          new = '"$(find "$TERMUX_PKG_SRCDIR" -type f -path \'*/foot.info\' -print -quit)"'
 
-          replacement = (
-              r'\1FOOT_INFO="$(find "$TERMUX_PKG_SRCDIR" '
-              r'-type f -path "*/foot.info" -print -quit)"\n'
-              r'\1if [[ -z "$FOOT_INFO" ]]; then\n'
-              r'\1    termux_error_exit "Could not locate foot.info"\n'
-              r'\1fi\n'
-              r'\1sed \'s/@default_terminfo@/foot/g\' "$FOOT_INFO" |'
-          )
-
-          updated, count = pattern.subn(replacement, content)
+          count = content.count(old)
 
           if count != 1:
               raise SystemExit(
-                  f"ERROR: Expected exactly one ncurses foot.info command, found {count}"
+                  f"ERROR: Expected exactly one foot.info path, found {count}"
               )
 
-          path.write_text(updated)
-          print("OK: ncurses now locates foot.info dynamically")
+          path.write_text(content.replace(old, new, 1))
+          print("OK: ncurses foot.info path updated")
           PY
 
           echo "===== UPDATED NCURSES FOOT SECTION ====="
-          grep -n -A5 -B2 'FOOT_INFO=' "$FILE"
+          grep -n -B2 -A3 'foot.info' "$FILE"
+
 
 
 
