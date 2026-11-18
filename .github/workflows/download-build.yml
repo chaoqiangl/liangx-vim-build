@@ -176,42 +176,37 @@ jobs:
 
 
 
-      - name: Fix ncurses foot terminfo source path
+
+      - name: Diagnose ncurses foot terminfo path
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="termux-packages/packages/ncurses/build.sh"
 
+          echo "===== CHECK NCURSES RECIPE ====="
           if [ ! -f "$FILE" ]; then
-            echo "ERROR: ncurses build.sh not found"
+            echo "ERROR: Recipe not found: $FILE"
+            find termux-packages -path '*/ncurses/build.sh' -print
             exit 1
           fi
 
-          python3 - "$FILE" <<'PY'
-          import pathlib
-          import sys
+          echo "===== ALL FOOT REFERENCES ====="
+          grep -n -C 5 -E 'foot|terminfo' "$FILE" || true
 
-          path = pathlib.Path(sys.argv[1])
-          content = path.read_text()
+          echo
+          echo "===== EXACT FOOT INFO PATH ====="
+          grep -n -F 'foot.info' "$FILE" || true
 
-          old = '"$TERMUX_PKG_SRCDIR/foot/foot.info"'
-          new = '"$(find "$TERMUX_PKG_SRCDIR" -type f -path \'*/foot.info\' -print -quit)"'
+          echo
+          echo "===== NCURSES SOURCE DIRECTORIES ====="
+          find "$HOME/.termux-build/ncurses" \
+            -maxdepth 4 -type d -name 'foot*' -print 2>/dev/null || true
 
-          count = content.count(old)
-
-          if count != 1:
-              raise SystemExit(
-                  f"ERROR: Expected exactly one foot.info path, found {count}"
-              )
-
-          path.write_text(content.replace(old, new, 1))
-          print("OK: ncurses foot.info path updated")
-          PY
-
-          echo "===== UPDATED NCURSES FOOT SECTION ====="
-          grep -n -B2 -A3 'foot.info' "$FILE"
-
+          echo
+          echo "===== FOOT INFO FILES ====="
+          find "$HOME/.termux-build/ncurses" \
+            -type f -name 'foot.info' -print 2>/dev/null || true
 
 
 
