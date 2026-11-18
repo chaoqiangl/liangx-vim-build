@@ -177,36 +177,46 @@ jobs:
 
 
 
-      - name: Diagnose ncurses foot terminfo path
+
+      - name: Fix ncurses foot terminfo source path
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="termux-packages/packages/ncurses/build.sh"
 
-          echo "===== CHECK NCURSES RECIPE ====="
           if [ ! -f "$FILE" ]; then
-            echo "ERROR: Recipe not found: $FILE"
+            echo "ERROR: ncurses build.sh not found"
             find termux-packages -path '*/ncurses/build.sh' -print
             exit 1
           fi
 
-          echo "===== ALL FOOT REFERENCES ====="
-          grep -n -C 5 -E 'foot|terminfo' "$FILE" || true
+          python3 - "$FILE" <<'PY'
+          import pathlib
+          import sys
 
-          echo
-          echo "===== EXACT FOOT INFO PATH ====="
-          grep -n -F 'foot.info' "$FILE" || true
+          path = pathlib.Path(sys.argv[1])
+          content = path.read_text()
 
-          echo
-          echo "===== NCURSES SOURCE DIRECTORIES ====="
-          find "$HOME/.termux-build/ncurses" \
-            -maxdepth 4 -type d -name 'foot*' -print 2>/dev/null || true
+          old = '$TERMUX_PKG_SRCDIR/foot/foot.info'
+          new = '$(find "$TERMUX_PKG_SRCDIR/foot" -type f -name foot.info -print -quit)'
 
-          echo
-          echo "===== FOOT INFO FILES ====="
-          find "$HOME/.termux-build/ncurses" \
-            -type f -name 'foot.info' -print 2>/dev/null || true
+          count = content.count(old)
+
+          if count != 1:
+              print("ERROR: Expected exactly one original foot.info path.")
+              print("Matching lines:")
+              for number, line in enumerate(content.splitlines(), 1):
+                  if "foot.info" in line:
+                      print(f"{number}: {line}")
+              raise SystemExit(f"Found {count}, expected 1")
+
+          path.write_text(content.replace(old, new, 1))
+          print("OK: ncurses foot.info lookup updated")
+          PY
+
+          echo "===== UPDATED NCURSES FOOT SECTION ====="
+          grep -n -B2 -A3 'foot.info' "$FILE"
 
 
 
