@@ -183,38 +183,60 @@ jobs:
 
 
 
-      - name: Diagnose original ncurses recipe
+
+      - name: Fix ncurses foot terminfo source path
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="termux-packages/packages/ncurses/build.sh"
 
-          echo "===== NCURSES RECIPE LOCATION ====="
           if [ ! -f "$FILE" ]; then
-            echo "ERROR: Expected recipe not found"
-            find termux-packages -path '*/ncurses/build.sh' -print
+            echo "ERROR: ncurses build.sh not found"
             exit 1
           fi
 
-          echo "===== ORIGINAL NCURSES BUILD.SH ====="
-          cat "$FILE"
+          python3 - "$FILE" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          content = path.read_text()
+
+          old = """\tsed 's/@default_terminfo@/foot/g' "$TERMUX_PKG_SRCDIR/foot/foot.info" | \\"""
+
+          new = """\tlocal FOOT_INFO
+          \tFOOT_INFO="$(find "$TERMUX_PKG_SRCDIR" -type f -name foot.info -print -quit)"
+
+          \tif [[ -z "$FOOT_INFO" ]]; then
+          \t\ttermux_error_exit "Could not locate foot.info under $TERMUX_PKG_SRCDIR"
+          \tfi
+
+          \tsed 's/@default_terminfo@/foot/g' "$FOOT_INFO" | \\"""
+
+          count = content.count(old)
+
+          if count != 1:
+              raise SystemExit(
+                  f"ERROR: Expected exactly one original foot terminfo command, found {count}"
+              )
+
+          path.write_text(content.replace(old, new, 1))
+
+          print("OK: ncurses foot terminfo lookup patched")
+          PY
+
+          echo "===== UPDATED NCURSES FOOT SECTION ====="
+          grep -n -B5 -A5 'FOOT_INFO' "$FILE"
 
           echo
-          echo "===== FOOT REFERENCES IN NCURSES RECIPE ====="
-          grep -n -i -C 6 'foot' "$FILE" || true
+          echo "===== VERIFY ORIGINAL PATH REMOVED ====="
+          if grep -n -F '"$TERMUX_PKG_SRCDIR/foot/foot.info"' "$FILE"; then
+            echo "ERROR: Original foot.info path still exists"
+            exit 1
+          fi
 
-          echo
-          echo "===== TERMINFO REFERENCES ====="
-          grep -n -i -C 3 'terminfo' "$FILE" || true
-
-          echo
-          echo "===== NCURSES SOURCE CONFIGURATION ====="
-          grep -n -E 'TERMUX_PKG_(SRCURL|EXTRA|BUILD|DIR|PATCH)' "$FILE" || true
-
-          echo
-          echo "===== FOOT RECIPE ====="
-          cat termux-packages/x11-packages/foot/build.sh
+          echo "OK: Original hardcoded path removed"
 
 
 
