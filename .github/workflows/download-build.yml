@@ -280,7 +280,7 @@ jobs:
 
           echo "===== BUILD TARGET RECIPES ====="
 
-          for package in rclone python-yt-dlp wget2
+          for package in rclone python-yt-dlp wget2 gpgme
           do
             if [ ! -f "packages/$package/build.sh" ]; then
               echo "ERROR: Missing recipe: $package"
@@ -305,6 +305,7 @@ jobs:
           echo "rclone"
           echo "python-yt-dlp"
           echo "wget2"
+          echo "gpgme"
 
           echo "===== ARCHITECTURE ====="
           echo "aarch64"
@@ -318,7 +319,8 @@ jobs:
             -o "$GITHUB_WORKSPACE/debs" \
             rclone \
             python-yt-dlp \
-            wget2
+            wget2 \
+            gpgme
 
       - name: Verify generated DEB packages
         shell: bash
@@ -359,7 +361,7 @@ jobs:
 
           echo "===== REQUIRED TARGETS ====="
 
-          for required in rclone python-yt-dlp wget2
+          for required in rclone python-yt-dlp wget2 gpgme
           do
             if ! awk -v p="$required" '$1 == p { found=1 } END { exit !found }' "$MANIFEST"; then
               echo "ERROR: Required package missing: $required"
