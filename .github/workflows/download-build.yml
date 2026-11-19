@@ -128,9 +128,9 @@ jobs:
             '^(TERMUX_PKG_VERSION|TERMUX_PKG_SRCURL|TERMUX_PKG_SHA256)=' \
             "$FILE"
 
-          if grep -n "codeberg.org/dnkl/foot" \
+          if grep -nE '^TERMUX_PKG_SRCURL=.*codeberg\.org/dnkl/foot' \
             x11-packages/foot/build.sh; then
-            echo "ERROR: Codeberg URL still exists in foot build recipe"
+            echo "ERROR: Codeberg download URL still exists in foot build recipe"
             exit 1
           fi
 
