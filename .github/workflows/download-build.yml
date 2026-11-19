@@ -129,7 +129,7 @@ jobs:
             "$FILE"
 
           if grep -n "codeberg.org/dnkl/foot" \
-            termux-packages/x11-packages/foot/build.sh; then
+            x11-packages/foot/build.sh; then
             echo "ERROR: Codeberg URL still exists in foot build recipe"
             exit 1
           fi
@@ -171,18 +171,6 @@ jobs:
 
           echo
           echo "OK: foot Debian source archive verified"
-
-
-
-
-
-
-
-
-
-
-
-
 
       - name: Fix ncurses foot terminfo source path
         shell: bash
@@ -237,15 +225,6 @@ jobs:
           fi
 
           echo "OK: Original hardcoded path removed"
-
-
-
-
-
-
-
-
-
 
       - name: Install Ubuntu build environment
         working-directory: termux-packages
