@@ -710,7 +710,53 @@ jobs:
           PY
 
       # ============================================================
-      # 13. Generate SHA256 checksums
+
+
+      # ============================================================
+      # 13. Normalize DEB filenames for GitHub Artifact
+      # ============================================================
+
+      - name: Normalize DEB filenames
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT="$GITHUB_WORKSPACE/termux-packages/output"
+
+          echo "===== NORMALIZE DEB FILENAMES ====="
+
+          find "$OUT" -maxdepth 1 -type f -name '*.deb' -print0 |
+          while IFS= read -r -d '' file
+          do
+            filename="$(basename "$file")"
+
+            # Replace characters rejected by GitHub Artifact.
+            safe_filename="${filename//:/_}"
+
+            if [ "$filename" != "$safe_filename" ]; then
+              echo "Rename:"
+              echo "  $filename"
+              echo "  $safe_filename"
+
+              mv -- "$file" "$OUT/$safe_filename"
+            fi
+          done
+
+          echo
+          echo "===== VERIFY FILENAMES ====="
+
+          if find "$OUT" -maxdepth 1 -type f -name '*.deb' \
+            -printf '%f\n' | grep -q ':'; then
+            echo "ERROR: Colon still exists in DEB filename"
+            exit 1
+          fi
+
+          echo "OK: All DEB filenames are Artifact-compatible"
+
+
+
+      # 13.1 Generate SHA256 checksums
       # ============================================================
 
       - name: Generate SHA256 checksums
