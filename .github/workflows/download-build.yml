@@ -1,3 +1,4 @@
+
 name: Build Liangx Download Tools DEBs
 
 on:
@@ -18,6 +19,10 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      # ============================================================
+      # 1. Runner information
+      # ============================================================
+
       - name: Check runner resources
         shell: bash
         run: |
@@ -35,12 +40,20 @@ jobs:
           echo "===== DISK ====="
           df -h /
 
+      # ============================================================
+      # 2. Checkout pinned Termux packages source
+      # ============================================================
+
       - name: Checkout official Termux packages
         uses: actions/checkout@v4
         with:
           repository: termux/termux-packages
           ref: e0ce77d242bb9f9adb48cc38dca4d69b3b6d0af9
           path: termux-packages
+
+      # ============================================================
+      # 3. Configure com.liangx package identity
+      # ============================================================
 
       - name: Configure package identity
         working-directory: termux-packages
@@ -57,6 +70,10 @@ jobs:
 
           echo "===== PACKAGE IDENTITY ====="
           grep '^TERMUX_APP__PACKAGE_NAME=' scripts/properties.sh
+
+      # ============================================================
+      # 4. Switch foot to Debian source mirror
+      # ============================================================
 
       - name: Switch foot to Debian source mirror
         working-directory: termux-packages
@@ -131,13 +148,18 @@ jobs:
             '^(TERMUX_PKG_VERSION|TERMUX_PKG_SRCURL|TERMUX_PKG_SHA256)=' \
             "$FILE"
 
-          if grep -nE '^TERMUX_PKG_SRCURL=.*codeberg\.org/dnkl/foot' \
+          if grep -nE \
+            '^TERMUX_PKG_SRCURL=.*codeberg\.org/dnkl/foot' \
             "$FILE"; then
-            echo "ERROR: Codeberg download URL still exists in foot build recipe"
+            echo "ERROR: Codeberg source URL still exists"
             exit 1
           fi
 
           echo "OK: foot build recipe uses Debian source mirror"
+
+      # ============================================================
+      # 5. Verify foot source archive and SHA256
+      # ============================================================
 
       - name: Verify foot Debian source mirror
         shell: bash
@@ -173,11 +195,11 @@ jobs:
 
           echo
           echo "===== ARCHIVE CONTENTS PREVIEW ====="
-
           sed -n '1,20p' "$RUNNER_TEMP/foot-archive-list.txt"
 
-          echo
-          echo "OK: foot Debian source archive verified"
+      # ============================================================
+      # 6. Fix ncurses foot.info lookup
+      # ============================================================
 
       - name: Fix ncurses foot terminfo source path
         shell: bash
@@ -222,34 +244,45 @@ jobs:
           PY
 
           echo "===== UPDATED NCURSES FOOT SECTION ====="
-
-          grep -n -B5 -A5 'FOOT_INFO' "$FILE"
+          grep -n -B5 -A8 'FOOT_INFO' "$FILE"
 
           echo
           echo "===== VERIFY ORIGINAL PATH REMOVED ====="
 
-          if grep -n -F '"$TERMUX_PKG_SRCDIR/foot/foot.info"' "$FILE"; then
-            echo "ERROR: Original foot.info path still exists"
+          if grep -n -F \
+            '"$TERMUX_PKG_SRCDIR/foot/foot.info"' \
+            "$FILE"; then
+            echo "ERROR: Original hardcoded path still exists"
             exit 1
           fi
 
           echo "OK: Original hardcoded path removed"
+
+      # ============================================================
+      # 7. Install Ubuntu build environment
+      # ============================================================
 
       - name: Install Ubuntu build environment
         working-directory: termux-packages
         shell: bash
         run: |
           set -euo pipefail
-
           ./scripts/setup-ubuntu.sh
+
+      # ============================================================
+      # 8. Install Android SDK and NDK
+      # ============================================================
 
       - name: Install Android SDK and NDK
         working-directory: termux-packages
         shell: bash
         run: |
           set -euo pipefail
-
           ./scripts/setup-android-sdk.sh
+
+      # ============================================================
+      # 9. Verify source and all target recipes
+      # ============================================================
 
       - name: Verify source and build recipes
         working-directory: termux-packages
@@ -259,6 +292,14 @@ jobs:
 
           echo "===== SOURCE COMMIT ====="
           git rev-parse HEAD
+
+          EXPECTED_COMMIT="e0ce77d242bb9f9adb48cc38dca4d69b3b6d0af9"
+          ACTUAL_COMMIT="$(git rev-parse HEAD)"
+
+          if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
+            echo "ERROR: Unexpected Termux source commit"
+            exit 1
+          fi
 
           echo
           echo "===== PACKAGE IDENTITY ====="
@@ -274,10 +315,16 @@ jobs:
           echo
           echo "===== BUILD TARGET RECIPES ====="
 
-          for package in rclone python-yt-dlp wget2 gpgme
+          for package in \
+            rclone \
+            python-yt-dlp \
+            wget2 \
+            gpgme \
+            python-brotli \
+            python-pycryptodomex
           do
             if [ ! -f "packages/$package/build.sh" ]; then
-              echo "ERROR: Missing recipe: $package"
+              echo "ERROR: Missing recipe: packages/$package/build.sh"
               exit 1
             fi
 
@@ -288,77 +335,40 @@ jobs:
           echo "===== DISK BEFORE BUILD ====="
           df -h /
 
-      - name: Prepare DEB output directory
-        shell: bash
-        run: |
-          set -euo pipefail
+      # ============================================================
+      # 10. Build all targets and recursive dependencies
+      # ============================================================
 
-          DEB_DIR="$GITHUB_WORKSPACE/debs"
-
-          mkdir -p "$DEB_DIR"
-
-          rm -f "$DEB_DIR"/*.deb
-          rm -f "$DEB_DIR"/PACKAGE-MANIFEST.txt
-          rm -f "$DEB_DIR"/SHA256SUMS.txt
-
-          echo "===== DEB OUTPUT DIRECTORY ====="
-          ls -la "$DEB_DIR"
-
-      - name: Build gpgme DEB independently
+      - name: Build download tools and all dependencies
         working-directory: termux-packages
         shell: bash
         run: |
           set -euo pipefail
 
-          DEB_DIR="$GITHUB_WORKSPACE/debs"
+          # Use the official default output directory.
+          # Recursive dependency builds inherit this exported variable.
+          export TERMUX_OUTPUT_DIR="$GITHUB_WORKSPACE/termux-packages/output"
 
-          echo "===== BUILD GPGME FIRST ====="
-          echo "Architecture: aarch64"
-          echo "Package: gpgme"
+          # Do not reuse old DEBs from previous builds.
+          rm -rf "$TERMUX_OUTPUT_DIR"
+          mkdir -p "$TERMUX_OUTPUT_DIR"
 
-          ./build-package.sh \
-            -a aarch64 \
-            -j2 \
-            -o "$DEB_DIR" \
-            gpgme
+          echo "===== OUTPUT DIRECTORY ====="
+          echo "$TERMUX_OUTPUT_DIR"
 
           echo
-          echo "===== VERIFY GPGME DEB ====="
+          echo "===== BUILD TARGETS ====="
 
-          FOUND=0
+          TARGETS=(
+            rclone
+            python-yt-dlp
+            wget2
+            gpgme
+            python-brotli
+            python-pycryptodomex
+          )
 
-          for deb in "$DEB_DIR"/*.deb
-          do
-            [ -f "$deb" ] || continue
-
-            package="$(dpkg-deb -f "$deb" Package)"
-
-            if [ "$package" = "gpgme" ]; then
-              echo "FOUND: $deb"
-              dpkg-deb -f "$deb" Package Version Architecture
-              FOUND=1
-            fi
-          done
-
-          if [ "$FOUND" -ne 1 ]; then
-            echo "ERROR: gpgme DEB was not generated"
-            exit 1
-          fi
-
-          echo "OK: gpgme DEB generated independently"
-
-      - name: Build remaining download tools
-        working-directory: termux-packages
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          DEB_DIR="$GITHUB_WORKSPACE/debs"
-
-          echo "===== BUILD REMAINING TARGETS ====="
-          echo "rclone"
-          echo "python-yt-dlp"
-          echo "wget2"
+          printf '%s\n' "${TARGETS[@]}"
 
           echo
           echo "===== ARCHITECTURE ====="
@@ -368,31 +378,46 @@ jobs:
           echo "===== PREFIX ====="
           echo "/data/data/com.liangx/files/usr"
 
+          echo
+          echo "===== BUILD MODE ====="
+          echo "Force build targets and dependencies (-F)"
+
+          # -F forces rebuilding packages and their dependencies.
+          # No -o option: all recursive builds use TERMUX_OUTPUT_DIR.
           ./build-package.sh \
             -a aarch64 \
             -j2 \
-            -o "$DEB_DIR" \
-            rclone \
-            python-yt-dlp \
-            wget2
+            -F \
+            "${TARGETS[@]}"
+
+          echo
+          echo "===== BUILD FINISHED ====="
+          find "$TERMUX_OUTPUT_DIR" -type f -name '*.deb' -print | sort
+
+          echo
+          echo "===== DISK AFTER BUILD ====="
+          df -h /
+
+      # ============================================================
+      # 11. Verify generated DEBs and create manifests
+      # ============================================================
 
       - name: Verify generated DEB packages
+        working-directory: termux-packages
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
 
-          DEB_DIR="$GITHUB_WORKSPACE/debs"
-
-          DEBS=("$DEB_DIR"/*.deb)
+          OUT="$GITHUB_WORKSPACE/termux-packages/output"
+          DEBS=("$OUT"/*.deb)
 
           if [ "${#DEBS[@]}" -eq 0 ]; then
-            echo "ERROR: No DEB packages were generated."
+            echo "ERROR: No DEB packages were generated"
             exit 1
           fi
 
-          MANIFEST="$DEB_DIR/PACKAGE-MANIFEST.txt"
-
+          MANIFEST="$OUT/PACKAGE-MANIFEST.txt"
           : > "$MANIFEST"
 
           echo "===== GENERATED PACKAGES ====="
@@ -403,7 +428,7 @@ jobs:
             version="$(dpkg-deb -f "$deb" Version)"
             architecture="$(dpkg-deb -f "$deb" Architecture)"
 
-            printf '%-30s %-25s %s\n' \
+            printf '%-32s %-25s %s\n' \
               "$package" "$version" "$architecture"
 
             printf '%s %s %s\n' \
@@ -420,12 +445,17 @@ jobs:
           echo
           echo "===== REQUIRED TARGETS ====="
 
-          for required in rclone python-yt-dlp wget2 gpgme
+          for required in \
+            rclone \
+            python-yt-dlp \
+            wget2 \
+            gpgme \
+            python-brotli \
+            python-pycryptodomex
           do
             if ! awk -v p="$required" \
               '$1 == p { found=1 } END { exit !found }' \
               "$MANIFEST"; then
-
               echo "ERROR: Required package missing: $required"
               exit 1
             fi
@@ -434,30 +464,294 @@ jobs:
           done
 
           echo
-          echo "===== SHA256 CHECKSUMS ====="
-
-          cd "$DEB_DIR"
-
-          sha256sum ./*.deb > SHA256SUMS.txt
-
-          sha256sum -c SHA256SUMS.txt
-
-          echo
-          echo "===== TOTAL ====="
-
+          echo "===== PACKAGE COUNT ====="
           echo "DEB count: ${#DEBS[@]}"
 
-          du -sh "$DEB_DIR"
+          echo
+          echo "===== OUTPUT SIZE ====="
+          du -sh "$OUT"
+
+      # ============================================================
+      # 12. Verify recursive runtime dependency closure
+      # ============================================================
+
+      - name: Verify runtime dependency closure
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT="$GITHUB_WORKSPACE/termux-packages/output"
+
+          python3 - "$OUT" <<'PY'
+          import pathlib
+          import re
+          import subprocess
+          import sys
+
+          out = pathlib.Path(sys.argv[1])
+          debs = sorted(out.glob("*.deb"))
+
+          if not debs:
+              raise SystemExit("ERROR: No DEB files found")
+
+          # Only add packages here when they are guaranteed to exist
+          # in every supported com.liangx base installation.
+          #
+          # Leave empty by default: unresolved dependencies must be
+          # delivered as DEBs rather than silently ignored.
+          BASE_PACKAGES = set()
+
+          packages = {}
+          provides = {}
+
+          def field(deb, name):
+              result = subprocess.run(
+                  ["dpkg-deb", "-f", str(deb), name],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.DEVNULL
+              )
+              if result.returncode != 0:
+                  return ""
+              return result.stdout.strip()
+
+          def split_top(text, separator):
+              result = []
+              start = 0
+              depth = 0
+
+              for i, char in enumerate(text):
+                  if char in "([":
+                      depth += 1
+                  elif char in ")]":
+                      depth = max(0, depth - 1)
+                  elif char == separator and depth == 0:
+                      result.append(text[start:i].strip())
+                      start = i + 1
+
+              result.append(text[start:].strip())
+              return [x for x in result if x]
+
+          def parse_atom(atom):
+              atom = re.sub(r"\[[^\]]*\]", "", atom)
+              atom = re.sub(r"<[^>]*>", "", atom)
+
+              match = re.match(
+                  r"\s*([a-z0-9][a-z0-9+.-]*)"
+                  r"(?::[a-z0-9-]+)?"
+                  r"\s*(?:\(\s*(<<|<=|=|>=|>>)\s*([^)]+)\))?",
+                  atom
+              )
+
+              if not match:
+                  return None
+
+              return (
+                  match.group(1),
+                  match.group(2),
+                  match.group(3).strip() if match.group(3) else None
+              )
+
+          def version_ok(actual, operator, required):
+              if not operator:
+                  return True
+
+              return subprocess.run(
+                  ["dpkg", "--compare-versions", actual, operator, required],
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL
+              ).returncode == 0
+
+          # Read all package metadata.
+          for deb in debs:
+              name = field(deb, "Package")
+              version = field(deb, "Version")
+              arch = field(deb, "Architecture")
+
+              if not name or not version:
+                  raise SystemExit(f"ERROR: Invalid DEB metadata: {deb}")
+
+              if name in packages:
+                  raise SystemExit(
+                      f"ERROR: Duplicate package name in output: {name}"
+                  )
+
+              packages[name] = {
+                  "version": version,
+                  "architecture": arch,
+                  "deb": deb,
+              }
+
+          # Read Provides fields, including versioned Provides.
+          for name, info in packages.items():
+              raw = field(info["deb"], "Provides")
+
+              for item in split_top(raw, ","):
+                  parsed = parse_atom(item)
+
+                  if not parsed:
+                      continue
+
+                  virtual_name, operator, virtual_version = parsed
+
+                  provides.setdefault(virtual_name, []).append({
+                      "package": name,
+                      "version": virtual_version or info["version"],
+                      "operator": operator,
+                  })
+
+          def candidate_satisfies(atom):
+              parsed = parse_atom(atom)
+
+              if not parsed:
+                  return False
+
+              name, operator, required_version = parsed
+
+              if name in BASE_PACKAGES:
+                  return True
+
+              candidates = []
+
+              if name in packages:
+                  candidates.append({
+                      "version": packages[name]["version"],
+                      "operator": None,
+                  })
+
+              candidates.extend(provides.get(name, []))
+
+              for candidate in candidates:
+                  if not operator:
+                      return True
+
+                  candidate_version = candidate["version"]
+
+                  if candidate["operator"] == "=":
+                      if version_ok(
+                          candidate_version,
+                          operator,
+                          required_version
+                      ):
+                          return True
+                  elif candidate["operator"] is None:
+                      if version_ok(
+                          candidate_version,
+                          operator,
+                          required_version
+                      ):
+                          return True
+
+              return False
+
+          dependency_report = []
+          missing = []
+
+          print("===== RUNTIME DEPENDENCY AUDIT =====")
+
+          for package_name, info in sorted(packages.items()):
+              depends = field(info["deb"], "Depends")
+              pre_depends = field(info["deb"], "Pre-Depends")
+
+              combined = []
+
+              if pre_depends:
+                  combined.append(("Pre-Depends", pre_depends))
+
+              if depends:
+                  combined.append(("Depends", depends))
+
+              for field_name, expression in combined:
+                  for group in split_top(expression, ","):
+                      alternatives = split_top(group, "|")
+
+                      if any(
+                          candidate_satisfies(atom)
+                          for atom in alternatives
+                      ):
+                          selected = " | ".join(alternatives)
+                          dependency_report.append(
+                              f"{package_name}: {field_name}: "
+                              f"{selected} [OK]"
+                          )
+                      else:
+                          selected = " | ".join(alternatives)
+
+                          message = (
+                              f"{package_name}: {field_name}: "
+                              f"{selected} [MISSING]"
+                          )
+
+                          missing.append(message)
+                          dependency_report.append(message)
+
+          report_file = out / "DEPENDENCY-CLOSURE.txt"
+          report_file.write_text(
+              "\n".join(dependency_report) + "\n"
+          )
+
+          print("\n".join(dependency_report))
+
+          print()
+          print("===== DEPENDENCY AUDIT SUMMARY =====")
+          print(f"DEB packages: {len(packages)}")
+          print(f"Dependency entries: {len(dependency_report)}")
+          print(f"Unresolved dependencies: {len(missing)}")
+
+          if missing:
+              print()
+              print("ERROR: Runtime dependency closure is incomplete.")
+              print("The following dependencies are not present:")
+              print("\n".join(missing))
+              raise SystemExit(1)
+
+          print("OK: All Depends and Pre-Depends are satisfied.")
+          PY
+
+      # ============================================================
+      # 13. Generate SHA256 checksums
+      # ============================================================
+
+      - name: Generate SHA256 checksums
+        working-directory: termux-packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT="$GITHUB_WORKSPACE/termux-packages/output"
+
+          cd "$OUT"
+
+          find . -maxdepth 1 -type f -name '*.deb' \
+            -printf '%f\n' \
+            | sort \
+            | while IFS= read -r file
+              do
+                sha256sum "$file"
+              done > SHA256SUMS.txt
+
+          echo "===== SHA256SUMS ====="
+          cat SHA256SUMS.txt
 
           echo
-          echo "===== PACKAGE VERIFICATION SUCCESS ====="
+          echo "===== FINAL OUTPUT CONTENTS ====="
+          find . -maxdepth 1 -type f -printf '%f\n' | sort
 
-      - name: Upload download DEB packages
+          echo
+          echo "===== FINAL OUTPUT SIZE ====="
+          du -sh .
+
+      # ============================================================
+      # 14. Upload the entire output directory
+      # ============================================================
+
+      - name: Upload all AArch64 DEBs and manifests
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: liangx-download-aarch64-debs
-          path: debs/
+          path: termux-packages/output/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
           compression-level: 0
